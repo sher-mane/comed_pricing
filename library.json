@@ -1,0 +1,6 @@
+{
+  "name": "wled-usermod-comed-pricing",
+  "version": "0.1.0",
+  "description": "WLED usermod: ComEd 5-minute price bar-graph 2D effect",
+  "build": { "libArchive": false }
+}
