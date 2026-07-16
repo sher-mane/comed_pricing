@@ -21,7 +21,7 @@ lib_deps = ${esp32s3.lib_deps}
 
 Note: in current WLED nightlies, external paths in `custom_usermods` are **not** supported by `pio-scripts/load_usermods.py` — the `lib_deps` + `symlink://` form above is the working mechanism. The library name in `library.json` must keep its `wled-` prefix so the build treats it as a WLED module.
 
-ESP32 (or newer variants) only: the ComEd API is HTTPS-only, which requires `WiFiClientSecure`.
+ESP32-family only. The ComEd API is HTTPS-only, and the Tasmota-forked Arduino core WLED builds with ships **no TLS** (no `WiFiClientSecure`; the mbedTLS SSL layer is stripped from the precompiled IDF libraries). This usermod therefore depends on [openslab-osu/SSLClient](https://registry.platformio.org/libraries/openslab-osu/SSLClient) (declared in `library.json`, auto-installed by PlatformIO), which compiles BearSSL from source (~50 KB flash) and runs over the framework's plain `WiFiClient`.
 
 ## Configuration (Config → Usermods → "ComEd Pricing")
 
@@ -38,7 +38,7 @@ Current price and slot count are shown in the UI **Info** panel.
 ## Notes
 
 - Each fetch performs a blocking TLS handshake (~1–3 s), which briefly freezes animations. Since the bar graph is static between updates, this is invisible while the effect itself is showing — `fetchOnlyWhenActive` keeps it that way. Raise `updateIntervalSec` if you run other animations alongside.
-- Certificate validation is skipped (`setInsecure()`); the data is a public price feed.
+- The server certificate is validated against the root CAs embedded in `trust_anchors.h` (DigiCert Global Root G2 — ComEd's current root, valid to 2038 — plus DigiCert Global Root CA and ISRG Root X1 as fallbacks). If ComEd ever moves to a different CA, regenerate that header from the new root's PEM (same format as SSLClient's `pycert_bearssl` tool output).
 - The response is parsed with a bounded stream scan (at most ~32 entries of the ~13 KB / 24 h body are read); no JSON document is allocated.
 
 Data source: ComEd Hourly Pricing program, https://hourlypricing.comed.com/hp-api/ (5-minute feed, prices in ¢/kWh).

@@ -1,6 +1,6 @@
 #include "wled.h"
-#include <HTTPClient.h>
-#include <WiFiClientSecure.h>
+#include <SSLClient.h>
+#include "trust_anchors.h"
 
 /*
  * ComEd Pricing usermod
@@ -75,37 +75,45 @@ class ComedPricingUsermod : public Usermod {
 
     static const char _name[];
 
-    // Fetch the 5-minute feed and fill the slot grid. The feed is newest-first, so the
-    // first entry anchors the grid; every other entry is placed by its timestamp
-    // distance from the anchor. Slots the feed skipped remain NAN (unlit).
-    // The body is scanned as a raw stream (HTTP/1.0 = unchunked) so at most ~32 entries
-    // of the ~13KB/24h response are read and no JSON document is ever allocated.
-    // Note: the TLS handshake blocks the main loop for ~1-3s per fetch; see readme.
+    // Fetch the 5-minute feed and fill the slot grid. The Tasmota Arduino core WLED
+    // builds with ships no TLS (no WiFiClientSecure, mbedTLS SSL stripped from the
+    // precompiled IDF), so HTTPS is done with SSLClient (BearSSL compiled from source)
+    // over a plain WiFiClient, validating against the roots in trust_anchors.h.
+    //
+    // The feed is newest-first, so the first entry anchors the grid; every other entry
+    // is placed by its timestamp distance from the anchor. Slots the feed skipped
+    // remain NAN (unlit). The body is scanned as a raw stream (HTTP/1.0 = unchunked),
+    // so only ~1.5KB of the ~13KB/24h response is ever read and no JSON document is
+    // allocated. Note: the TLS handshake blocks the main loop for ~1-3s per fetch.
     bool fetchPrices() {
-      WiFiClientSecure client;
-      client.setInsecure(); // price display; skip cert store maintenance
-      client.setTimeout(10000);
-      HTTPClient http;
-      http.useHTTP10(true); // unchunked body so the raw stream is scannable
-      http.setConnectTimeout(5000);
-      http.setTimeout(8000);
-      if (!http.begin(client, F("https://hourlypricing.comed.com/api?type=5minutefeed"))) return false;
-      int code = http.GET();
-      if (code != HTTP_CODE_OK) { http.end(); return false; }
+      // Static so the BearSSL buffers live in BSS (not the loop task stack) and the
+      // session cache can speed up reconnects. Entropy pin: any ADC-capable pin works,
+      // SSLClient only reads noise from it.
+      static WiFiClient wifiClient;
+      static SSLClient tls(wifiClient, TAs, (size_t)TAs_NUM, /*analog_pin=*/1);
+
+      tls.setTimeout(5000);
+      if (!tls.connect("hourlypricing.comed.com", 443)) { tls.stop(); return false; }
+      tls.print(F("GET /api?type=5minutefeed HTTP/1.0\r\n"
+                  "Host: hourlypricing.comed.com\r\n"
+                  "User-Agent: WLED-ComedPricing\r\n"
+                  "Connection: close\r\n\r\n"));
+
+      String statusLine = tls.readStringUntil('\n');
+      if (statusLine.indexOf(F(" 200")) < 0 || !tls.find("\r\n\r\n")) { tls.stop(); return false; }
 
       float tmp[COMED_MAX_SLOTS];
       for (int i = 0; i < COMED_MAX_SLOTS; i++) tmp[i] = NAN;
       uint64_t newestMillis = 0;
       uint8_t entries = 0;
 
-      WiFiClient *stream = http.getStreamPtr();
       char buf[24];
-      while (stream->find("\"millisUTC\":\"")) {
-        size_t len = stream->readBytesUntil('"', buf, sizeof(buf) - 1);
+      while (tls.find("\"millisUTC\":\"")) {
+        size_t len = tls.readBytesUntil('"', buf, sizeof(buf) - 1);
         buf[len] = '\0';
         uint64_t entryMillis = strtoull(buf, nullptr, 10);
-        if (!stream->find("\"price\":\"")) break;
-        len = stream->readBytesUntil('"', buf, sizeof(buf) - 1);
+        if (!tls.find("\"price\":\"")) break;
+        len = tls.readBytesUntil('"', buf, sizeof(buf) - 1);
         buf[len] = '\0';
         float price = atof(buf);
 
@@ -116,7 +124,7 @@ class ComedPricingUsermod : public Usermod {
         tmp[COMED_MAX_SLOTS - 1 - slotBack] = price;
         entries++;
       }
-      http.end(); // aborts the rest of the 24h body
+      tls.stop(); // abort the rest of the 24h body
 
       if (entries == 0) return false;
       memcpy(s_prices, tmp, sizeof(s_prices));
