@@ -11,15 +11,22 @@ Requires a 2D matrix setup (Config → LED Preferences → 2D). On a 1D segment 
 
 ## Installation
 
-This is an external usermod (based on [wled-usermod-example](https://github.com/wled/wled-usermod-example)). Clone it next to your WLED checkout, then add it to your build environment's `lib_deps` in `platformio_override.ini`:
+Clone this repo into your WLED checkout's `usermods/` folder as `comed_pricing`, then add it to your build environment's usermod list in `platformio_override.ini` (or `platformio.ini`):
+
+```ini
+[env:esp32s3_4M_qspi]
+custom_usermods = audioreactive user_fx comed_pricing
+```
+
+(List whatever usermods your environment already had, plus `comed_pricing` — the override replaces the base value.)
+
+Alternative, if you prefer keeping the repo outside the WLED tree: external paths in `custom_usermods` are **not** supported by `pio-scripts/load_usermods.py`, but the build treats any `lib_deps` library whose name starts with `wled-` as a usermod, so this works instead:
 
 ```ini
 [env:esp32s3_4M_qspi]
 lib_deps = ${esp32s3.lib_deps}
   symlink://C:/Users/you/path/to/wled-usermod-comed-pricing
 ```
-
-Note: in current WLED nightlies, external paths in `custom_usermods` are **not** supported by `pio-scripts/load_usermods.py` — the `lib_deps` + `symlink://` form above is the working mechanism. The library name in `library.json` must keep its `wled-` prefix so the build treats it as a WLED module.
 
 ESP32-family only. The ComEd API is HTTPS-only, and the Tasmota-forked Arduino core WLED builds with ships **no TLS** (no `WiFiClientSecure`; the mbedTLS SSL layer is stripped from the precompiled IDF libraries). This usermod therefore depends on [openslab-osu/SSLClient](https://registry.platformio.org/libraries/openslab-osu/SSLClient) (declared in `library.json`, auto-installed by PlatformIO), which compiles BearSSL from source (~50 KB flash) and runs over the framework's plain `WiFiClient`.
 
