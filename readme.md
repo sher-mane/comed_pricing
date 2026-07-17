@@ -1,11 +1,26 @@
 # ComEd Pricing usermod for WLED
 
-Polls the [ComEd hourly-pricing API](https://hourlypricing.comed.com/hp-api/) 5-minute feed and adds a 2D-only effect named **ComedPricing** that renders recent prices as a bar graph on an LED matrix:
+Polls the [ComEd hourly-pricing API](https://hourlypricing.comed.com/hp-api/) 5-minute feed and adds two 2D-only effects for LED matrices. Both use the same color ramp: green at/below the green threshold (default 14¢), then green → yellow → orange → red up to the max price (default 100¢ = $1), and **dark red** at/above the max.
+
+## Effect: ComedPriceGraph
+
+Bar graph of recent prices:
 
 - One column per 5-minute time slot; the newest price is the rightmost column, older prices push left. Up to 32 slots are shown (fewer if the matrix is narrower).
 - If the feed skipped a 5-minute reading, that slot's column stays **unlit** (a gap).
-- Bar height scales the price from 0¢ to the configured max (default 100¢ = $1); prices at or above the max clamp to full height. Negative prices render as a 1-pixel floor.
-- Bar color: green at/below the green threshold (default 14¢), then ramps green → yellow → orange → red up to the max price, and **dark red** at/above the max.
+- Bar height scales the price from 0¢ to the configured max; prices at or above the max clamp to full height. Negative prices render as a 1-pixel floor.
+
+## Effect: ComedPricingText
+
+Scrolls the newest reading right-to-left like the built-in Scrolling Text effect, formatted as:
+
+```
+Feb 17 8:30am: $0.031
+```
+
+- Date and time are the reading's timestamp converted to the device's local timezone, price is in $/kWh with 3 decimals.
+- The whole text takes the price-ramp color for the current price.
+- Sliders: Effect speed (scroll rate), Y Offset, Trail, Font size — same behavior as the built-in Scrolling Text.
 
 Requires a 2D matrix setup (Config → LED Preferences → 2D). On a 1D segment the effect falls back to solid color.
 

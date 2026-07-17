@@ -6,11 +6,14 @@
  * ComEd Pricing usermod
  *
  * Polls the ComEd hourly-pricing 5-minute feed (https://hourlypricing.comed.com/hp-api/)
- * and registers a 2D-only effect "ComedPricing" that renders the most recent prices as a
- * bar graph: one column per 5-minute slot, newest slot on the right. Slots with no
- * published price stay unlit. Bar color ramps green -> yellow -> orange -> red between
- * the configured green threshold and max price; prices at/above max clamp to full
- * height in dark red.
+ * and registers two 2D-only effects:
+ *  - "ComedPriceGraph": bar graph of the most recent prices, one column per 5-minute
+ *    slot, newest slot on the right. Slots with no published price stay unlit.
+ *  - "ComedPricingText": scrolls the newest reading right-to-left like the built-in
+ *    Scrolling Text effect, e.g. "Feb 17 8:30am: $0.031" (reading's timestamp in
+ *    local time).
+ * Colors ramp green -> yellow -> orange -> red between the configured green threshold
+ * and max price; prices at/above max clamp to dark red (and full bar height).
  */
 
 #define COMED_MAX_SLOTS 32
@@ -19,6 +22,7 @@
 // Shared between the usermod's loop() (writer) and the effect function (reader).
 // Both run sequentially on the main loop task, so no locking is needed.
 static float    s_prices[COMED_MAX_SLOTS];   // [COMED_MAX_SLOTS-1]=newest slot ... [0]=oldest; NAN = missing
+static uint64_t s_newestMillis = 0;          // millisUTC of the newest reading
 static bool     s_haveData = false;
 static float    s_greenThreshold = 14.0f;    // cents
 static float    s_maxPrice = 100.0f;         // cents
@@ -40,7 +44,7 @@ static uint32_t priceColor(float price) {
   return RGBW32(r, g, 0, 0);
 }
 
-static void mode_comed_pricing(void) {
+static void mode_comed_price_graph(void) {
   if (!strip.isMatrix || !SEGMENT.is2D()) FX_FALLBACK_STATIC; // not a 2D set-up
   s_lastEffectRender = millis();
   const int cols = SEG_W, rows = SEG_H;
@@ -61,7 +65,60 @@ static void mode_comed_pricing(void) {
     for (int y = 0; y < h; y++) SEGMENT.setPixelColorXY(x, rows - 1 - y, c);
   }
 }
-static const char _data_FX_MODE_COMED_PRICING[] PROGMEM = "ComedPricing@;;;2;";
+static const char _data_FX_MODE_COMED_PRICE_GRAPH[] PROGMEM = "ComedPriceGraph@;;;2;";
+
+// Scrolls the newest reading right-to-left like the built-in Scrolling Text effect
+// (FX.cpp mode_2Dscrollingtext), e.g. "Feb 17 8:30am: $0.031". Date and time are the
+// reading's millisUTC converted to local time; the text takes the price-ramp color.
+static void mode_comed_pricing_text(void) {
+  if (!strip.isMatrix || !SEGMENT.is2D()) FX_FALLBACK_STATIC; // not a 2D set-up
+  s_lastEffectRender = millis();
+  const int cols = SEG_W;
+  const int rows = SEG_H;
+  SEGMENT.fade_out(255 - (SEGMENT.custom1>>4)); // trail
+  if (!s_haveData) return;
+
+  unsigned letterWidth, letterHeight;
+  switch (map(SEGMENT.custom2, 0, 255, 1, 5)) {
+    default:
+    case 1: letterWidth = 4; letterHeight =  6; break;
+    case 2: letterWidth = 5; letterHeight =  8; break;
+    case 3: letterWidth = 6; letterHeight =  8; break;
+    case 4: letterWidth = 7; letterHeight =  9; break;
+    case 5: letterWidth = 5; letterHeight = 12; break;
+  }
+
+  // WLED has no public UTC->local converter for arbitrary epochs (the Timezone object
+  // is private to ntp.cpp), so apply the current offset: localTime - toki.second().
+  updateLocalTime();
+  time_t entryLocal = (time_t)(s_newestMillis / 1000ULL) + (localTime - (time_t)toki.second());
+  float price = s_prices[COMED_MAX_SLOTS-1]; // anchor slot is always filled
+  char pbuf[12];
+  dtostrf(price / 100.0f, 0, 3, pbuf); // %f is unavailable (core built with NEWLIB_NANO_FORMAT)
+  char text[36];
+  snprintf_P(text, sizeof(text), PSTR("%s %d %d:%02d%s: $%s"),
+             monthShortStr(month(entryLocal)), day(entryLocal),
+             hourFormat12(entryLocal), minute(entryLocal),
+             isPM(entryLocal) ? "pm" : "am", pbuf);
+
+  const int numberOfLetters = strlen(text);
+  const int width = numberOfLetters * (int)letterWidth;
+  const int yoffset = map(SEGMENT.intensity, 0, 255, -rows/2, rows/2) + (rows - (int)letterHeight)/2;
+
+  if (SEGENV.step < strip.now) {
+    if (width > cols) ++SEGENV.aux0 %= width + cols;   // scroll right to left
+    else              SEGENV.aux0 = (cols + width)/2;  // fits on screen: hold centered
+    SEGENV.step = strip.now + map(SEGMENT.speed, 0, 255, 250, 50); // shift letters every ~250ms to ~50ms
+  }
+
+  uint32_t col = priceColor(price);
+  for (int i = 0; i < numberOfLetters; i++) {
+    int xoffset = cols - (int)SEGENV.aux0 + (int)letterWidth*i;
+    if (xoffset + (int)letterWidth < 0) continue; // don't draw characters off-screen
+    SEGMENT.drawCharacter(text[i], xoffset, yoffset, letterWidth, letterHeight, col, col, 0);
+  }
+}
+static const char _data_FX_MODE_COMED_PRICING_TEXT[] PROGMEM = "ComedPricingText@!,Y Offset,Trail,Font size;;;2;ix=128,c1=0";
 
 class ComedPricingUsermod : public Usermod {
   private:
@@ -128,13 +185,15 @@ class ComedPricingUsermod : public Usermod {
 
       if (entries == 0) return false;
       memcpy(s_prices, tmp, sizeof(s_prices));
+      s_newestMillis = newestMillis;
       s_haveData = true;
       return true;
     }
 
   public:
     void setup() override {
-      strip.addEffect(255, &mode_comed_pricing, _data_FX_MODE_COMED_PRICING);
+      strip.addEffect(255, &mode_comed_price_graph, _data_FX_MODE_COMED_PRICE_GRAPH);
+      strip.addEffect(255, &mode_comed_pricing_text, _data_FX_MODE_COMED_PRICING_TEXT);
     }
 
     void loop() override {
@@ -155,8 +214,10 @@ class ComedPricingUsermod : public Usermod {
       if (!s_haveData)       { arr.add(F("no data")); return; }
       uint8_t slots = 0;
       for (int i = 0; i < COMED_MAX_SLOTS; i++) if (!isnan(s_prices[i])) slots++;
+      char pbuf[12];
+      dtostrf(s_prices[COMED_MAX_SLOTS-1], 0, 1, pbuf); // %f unavailable (NEWLIB_NANO_FORMAT core)
       char txt[32];
-      snprintf_P(txt, sizeof(txt), PSTR("%.1f c (%u slots)"), s_prices[COMED_MAX_SLOTS-1], slots);
+      snprintf_P(txt, sizeof(txt), PSTR("%s c (%u slots)"), pbuf, slots);
       arr.add(txt);
     }
 
