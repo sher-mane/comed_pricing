@@ -10,8 +10,7 @@
  *  - "ComedPriceGraph": bar graph of the most recent prices, one column per 5-minute
  *    slot, newest slot on the right. Slots with no published price stay unlit.
  *  - "ComedPricingText": scrolls the newest reading right-to-left like the built-in
- *    Scrolling Text effect, e.g. "Feb 17 8:30am: $0.031" (reading's timestamp in
- *    local time).
+ *    Scrolling Text effect, e.g. "8:30am: $0.031" (reading's timestamp in local time).
  * Colors ramp green -> yellow -> orange -> red between the configured green threshold
  * and max price; prices at/above max clamp to dark red (and full bar height).
  */
@@ -68,8 +67,8 @@ static void mode_comed_price_graph(void) {
 static const char _data_FX_MODE_COMED_PRICE_GRAPH[] PROGMEM = "ComedPriceGraph@;;;2;";
 
 // Scrolls the newest reading right-to-left like the built-in Scrolling Text effect
-// (FX.cpp mode_2Dscrollingtext), e.g. "Feb 17 8:30am: $0.031". Date and time are the
-// reading's millisUTC converted to local time; the text takes the price-ramp color.
+// (FX.cpp mode_2Dscrollingtext), e.g. "8:30am: $0.031". The time is the reading's
+// millisUTC converted to local time; the text takes the price-ramp color.
 static void mode_comed_pricing_text(void) {
   if (!strip.isMatrix || !SEGMENT.is2D()) FX_FALLBACK_STATIC; // not a 2D set-up
   s_lastEffectRender = millis();
@@ -96,8 +95,7 @@ static void mode_comed_pricing_text(void) {
   char pbuf[12];
   dtostrf(price / 100.0f, 0, 3, pbuf); // %f is unavailable (core built with NEWLIB_NANO_FORMAT)
   char text[36];
-  snprintf_P(text, sizeof(text), PSTR("%s %d %d:%02d%s: $%s"),
-             monthShortStr(month(entryLocal)), day(entryLocal),
+  snprintf_P(text, sizeof(text), PSTR("%d:%02d%s: $%s"),
              hourFormat12(entryLocal), minute(entryLocal),
              isPM(entryLocal) ? "pm" : "am", pbuf);
 

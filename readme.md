@@ -15,10 +15,10 @@ Bar graph of recent prices:
 Scrolls the newest reading right-to-left like the built-in Scrolling Text effect, formatted as:
 
 ```
-Feb 17 8:30am: $0.031
+8:30am: $0.031
 ```
 
-- Date and time are the reading's timestamp converted to the device's local timezone, price is in $/kWh with 3 decimals.
+- The time is the reading's timestamp converted to the device's local timezone, price is in $/kWh with 3 decimals.
 - The whole text takes the price-ramp color for the current price.
 - Sliders: Effect speed (scroll rate), Y Offset, Trail, Font size — same behavior as the built-in Scrolling Text.
 
