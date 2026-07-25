@@ -1,6 +1,14 @@
 # ComEd Pricing usermod for WLED
 
-Polls the [ComEd hourly-pricing API](https://hourlypricing.comed.com/hp-api/) 5-minute feed and adds two 2D-only effects for LED matrices. Both use the same color ramp: green at/below the green threshold (default 14¢), then green → yellow → orange → red up to the max price (default 100¢ = $1), and **dark red** at/above the max.
+Polls the [ComEd hourly-pricing API](https://hourlypricing.comed.com/hp-api/) 5-minute feed and adds two 2D-only effects for LED matrices. Both color by the same three hard bands on absolute price:
+
+| Price | Color |
+|---|---|
+| under 8¢ | 🟢 green |
+| 8¢ – 15¢ | 🟠 orange |
+| 15¢ and above | 🔴 red |
+
+Both breakpoints are configurable. The bands are half-open, so exactly 8¢ is orange and exactly 15¢ is red.
 
 ## Effect: ComedPriceGraph
 
@@ -8,7 +16,8 @@ Bar graph of recent prices:
 
 - One column per 5-minute time slot; the newest price is the rightmost column, older prices push left. Up to 32 slots are shown (fewer if the matrix is narrower).
 - If the feed skipped a 5-minute reading, that slot's column stays **unlit** (a gap).
-- Bar height scales the price from 0¢ to the configured max; prices at or above the max clamp to full height. Negative prices render as a 1-pixel floor.
+- The Y axis **auto-scales**: every frame the highest price currently on screen is found and bars are scaled against it, so the tallest column always reaches the top row and the graph fills the panel. The bottom stays at 0¢, so heights remain proportional to actual price (a 2.5¢ column next to a 5¢ peak is half height). Negative prices render as a 1-pixel floor.
+- Because the scale is relative, the whole graph re-normalizes when the peak in view changes — use the colors, not the heights, to read absolute price.
 
 ## Effect: ComedPricingText
 
@@ -19,7 +28,7 @@ Scrolls the newest reading right-to-left like the built-in Scrolling Text effect
 ```
 
 - The time is the reading's timestamp converted to the device's local timezone, price is in $/kWh with 3 decimals.
-- The whole text takes the price-ramp color for the current price.
+- The whole text takes the band color for the current price.
 - Sliders: Effect speed (scroll rate), Y Offset, Trail, Font size — same behavior as the built-in Scrolling Text.
 
 Requires a 2D matrix setup (Config → LED Preferences → 2D). On a 1D segment the effect falls back to solid color.
@@ -51,8 +60,8 @@ ESP32-family only. The ComEd API is HTTPS-only, and the Tasmota-forked Arduino c
 |---|---|---|
 | `enabled` | off | Master switch for API polling. The effect is always registered but shows nothing until data arrives. |
 | `updateIntervalSec` | 60 | Seconds between fetches (floor 30). |
-| `greenThreshold` | 14 | Price in cents at/below which bars are pure green. |
-| `maxPrice` | 100 | Price in cents mapped to full bar height / dark red. |
+| `greenBelow` | 8 | Price in cents below which bars are green. |
+| `orangeBelow` | 15 | Price in cents below which bars are orange; at/above this they are red. |
 | `fetchOnlyWhenActive` | on | Only poll while the ComedPricing effect has rendered within the last 70 s. |
 
 Current price and slot count are shown in the UI **Info** panel.

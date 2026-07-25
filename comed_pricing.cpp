@@ -11,20 +11,23 @@
  *    slot, newest slot on the right. Slots with no published price stay unlit.
  *  - "ComedPricingText": scrolls the newest reading right-to-left like the built-in
  *    Scrolling Text effect, e.g. "8:30am: $0.031" (reading's timestamp in local time).
- * Colors ramp green -> yellow -> orange -> red between the configured green threshold
- * and max price; prices at/above max clamp to dark red (and full bar height).
+ * Colors are three hard bands on absolute price: green below the green threshold
+ * (default 8c), orange up to the orange threshold (default 15c), red at/above it.
+ * The graph's Y axis auto-scales to the highest price currently on screen, so the
+ * tallest bar always reaches the top row; the bottom of the graph stays at 0c.
  */
 
 #define COMED_MAX_SLOTS 32
 #define COMED_SLOT_MS   300000ULL  // 5 minutes
+#define COMED_MIN_SCALE_CENTS 1.0f // don't let auto-scale amplify sub-cent noise
 
 // Shared between the usermod's loop() (writer) and the effect function (reader).
 // Both run sequentially on the main loop task, so no locking is needed.
 static float    s_prices[COMED_MAX_SLOTS];   // [COMED_MAX_SLOTS-1]=newest slot ... [0]=oldest; NAN = missing
 static uint64_t s_newestMillis = 0;          // millisUTC of the newest reading
 static bool     s_haveData = false;
-static float    s_greenThreshold = 14.0f;    // cents
-static float    s_maxPrice = 100.0f;         // cents
+static float    s_greenBelow = 8.0f;         // cents; below this -> green
+static float    s_orangeBelow = 15.0f;       // cents; below this -> orange, at/above -> red
 static uint32_t s_lastEffectRender = 0;      // millis() of last effect frame
 
 // Local copy of FX.cpp's non-exported static fallback
@@ -33,14 +36,13 @@ static void mode_static(void) {
 }
 #define FX_FALLBACK_STATIC { mode_static(); return; }
 
+// Three hard bands, half-open: (-inf, green) green, [green, orange) orange, [orange, inf) red.
+// The orange is deliberately redder than WLED's ORANGE (255,160,0), which reads too close to
+// yellow when a green bar is right next to it.
 static uint32_t priceColor(float price) {
-  if (price >= s_maxPrice)       return RGBW32(128,   0, 0, 0); // darkest red
-  if (price <= s_greenThreshold) return RGBW32(  0, 255, 0, 0); // green
-  float t = (price - s_greenThreshold) / (s_maxPrice - s_greenThreshold); // (0,1)
-  uint8_t r, g;
-  if (t < 0.5f) { r = (uint8_t)(510.0f * t); g = 255; }                    // green -> yellow
-  else { r = 255; g = (uint8_t)(255.0f - 510.0f * (t - 0.5f)); }           // yellow -> orange -> red
-  return RGBW32(r, g, 0, 0);
+  if (price >= s_orangeBelow) return RGBW32(255,   0, 0, 0); // red
+  if (price >= s_greenBelow)  return RGBW32(255, 120, 0, 0); // orange
+  return RGBW32(0, 255, 0, 0);                               // green
 }
 
 static void mode_comed_price_graph(void) {
@@ -51,11 +53,21 @@ static void mode_comed_price_graph(void) {
   if (!s_haveData) return;
 
   int shown = min((int)COMED_MAX_SLOTS, cols);
+
+  // Pass 1: peak price in the visible window, so the tallest bar lands on the top row.
+  float vmax = 0.0f;
+  for (int k = 0; k < shown; k++) {
+    float p = s_prices[COMED_MAX_SLOTS - 1 - k];
+    if (!isnan(p) && p > vmax) vmax = p;
+  }
+  if (vmax < COMED_MIN_SCALE_CENTS) vmax = COMED_MIN_SCALE_CENTS;
+
+  // Pass 2: draw one column per slot, heights proportional to price against that peak.
   for (int k = 0; k < shown; k++) {         // k=0 -> newest slot -> rightmost column
     float price = s_prices[COMED_MAX_SLOTS - 1 - k];
     if (isnan(price)) continue;             // missing 5-min price -> unlit gap column
     int x = cols - 1 - k;
-    float frac = price / s_maxPrice;
+    float frac = price / vmax;
     if (frac > 1.0f) frac = 1.0f;
     if (frac < 0.0f) frac = 0.0f;           // negative prices clamp to 0
     int h = (int)roundf(frac * rows);
@@ -122,8 +134,8 @@ class ComedPricingUsermod : public Usermod {
   private:
     bool     enabled = false;
     uint16_t updateIntervalSec = 60;
-    float    greenThresholdCents = 14.0f;
-    float    maxPriceCents = 100.0f;
+    float    greenBelowCents = 8.0f;
+    float    orangeBelowCents = 15.0f;
     bool     fetchOnlyWhenActive = true;
     unsigned long lastFetch = 0;
     bool     lastFetchOk = false;
@@ -223,8 +235,8 @@ class ComedPricingUsermod : public Usermod {
       JsonObject top = root.createNestedObject(FPSTR(_name));
       top["enabled"]             = enabled;
       top["updateIntervalSec"]   = updateIntervalSec;
-      top["greenThreshold"]      = greenThresholdCents;
-      top["maxPrice"]            = maxPriceCents;
+      top["greenBelow"]          = greenBelowCents;
+      top["orangeBelow"]         = orangeBelowCents;
       top["fetchOnlyWhenActive"] = fetchOnlyWhenActive;
     }
 
@@ -233,13 +245,13 @@ class ComedPricingUsermod : public Usermod {
       bool ok = !top.isNull();
       ok &= getJsonValue(top["enabled"], enabled, false);
       ok &= getJsonValue(top["updateIntervalSec"], updateIntervalSec, 60);
-      ok &= getJsonValue(top["greenThreshold"], greenThresholdCents, 14.0f);
-      ok &= getJsonValue(top["maxPrice"], maxPriceCents, 100.0f);
+      ok &= getJsonValue(top["greenBelow"], greenBelowCents, 8.0f);
+      ok &= getJsonValue(top["orangeBelow"], orangeBelowCents, 15.0f);
       ok &= getJsonValue(top["fetchOnlyWhenActive"], fetchOnlyWhenActive, true);
       if (updateIntervalSec < 30) updateIntervalSec = 30; // be kind to the API
-      if (maxPriceCents <= greenThresholdCents + 1.0f) maxPriceCents = greenThresholdCents + 1.0f;
-      s_greenThreshold = greenThresholdCents;
-      s_maxPrice = maxPriceCents;
+      if (orangeBelowCents <= greenBelowCents) orangeBelowCents = greenBelowCents + 1.0f;
+      s_greenBelow = greenBelowCents;
+      s_orangeBelow = orangeBelowCents;
       return ok;
     }
 
